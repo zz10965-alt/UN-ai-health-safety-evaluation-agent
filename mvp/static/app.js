@@ -31,6 +31,7 @@ function table(id, heads, rows) {
 }
 const link=(id,attr='record',v=id)=>({key:id,html:`<button class="textbtn" data-${attr}="${esc(v)}">${esc(id)}</button>`});
 async function api(path,options){
+  if(window.workspace)return window.workspace.request(path,options);
   const r=await fetch('/api/'+path,options);
   const body=await r.json();
   if(!r.ok) throw Error(typeof body.detail==='string'?body.detail:'Request failed ('+r.status+').');
@@ -38,7 +39,15 @@ async function api(path,options){
 }
 const post=(path,obj)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)});
 async function refresh(){
+  const previousVersion=state.version;
   [state,[results]]=await Promise.all([api('state'),api('results?source='+encodeURIComponent(resultSource))]);
+  if(previousVersion && previousVersion!==state.version){
+    for(const key of Object.keys(filters))delete filters[key];
+  }
+  if(window.workspace){
+    $('#workspace-mode').textContent=state.demo?'Synthetic demo':'Private browser import';
+    $('#workspace-mode').classList.toggle('warn',Boolean(state.demo));
+  }
   if(study().length&&(!current()||!criteria().some(c=>c.ID===criterion))) choose(study()[0]['Response ID']);
 
 }
@@ -47,15 +56,15 @@ function overview(){
   const ids=new Set(responses.map(r=>r['Response ID']));
   const rs=historical().filter(r=>ids.has(r.response_id)&&r.source==='08 Review Evidence');
 
-  return `<section class="hero"><small>UN-ICC × NYU Capstone</small><h1>AI Safety Evaluation Assistant</h1><p>Inspect collected model responses, apply the official rubric, and document independent review decisions.</p><a class="button" href="#data">Browse research data →</a></section>
+  return `<section class="hero"><small>UN-ICC × NYU Capstone</small><h1>AI Safety Evaluation Assistant</h1>${state.demo?'<p>Explore a synthetic evaluation dataset, inspect evidence, save an example review, and export the results.</p>':'<p>Inspect collected model responses, apply the official rubric, and document independent review decisions.</p>'}<a class="button" href="#data">Browse research data →</a></section>
   <div class="toolbar">${filter('Study phase','phase',all(study().map(r=>r.phase)))}</div><div class="grid">
-  ${metric('Study prompts',new Set(responses.map(r=>r['Prompt ID'])).size)}${metric('Collected responses',responses.length)}${metric('Official criteria',criteria().length)}
+  ${metric('Study prompts',new Set(responses.map(r=>r['Prompt ID'])).size)}${metric('Collected responses',responses.length)}${metric(state.demo?'Illustrative criteria':'Official criteria',criteria().length)}
   ${metric('Preliminary records · second review',historical().filter(e=>e.source==='08 Review Evidence'&&ids.has(e.response_id)).length)}${metric('Pending criteria',rs.filter(r=>r.rating==='Pending').length)}${metric('Source verification checks',state.checks?.length||0)}
   ${metric('Possible critical failures',historical().filter(e=>e.source==='08 Review Evidence'&&ids.has(e.response_id)&&e.critical_candidate).length)}${metric('Responses with human review',new Set((state.reviews||[]).filter(v=>ids.has(v.response_id)).map(v=>v.response_id)).size)}</div>
   <div class="split">${panel('Collection by model',all(study().map(r=>r[model])).map(m=>{
     const n=responses.filter(r=>r[model]===m).length;
     return `<div class="row"><span>${esc(m)}</span><strong>${n}</strong></div><div class="bar"><div style="width:${responses.length?n/responses.length*100:0}%"></div></div>`;
-  }).join(''))}${panel('Research methods','<p>Expanded-phase data used six prompts per shared model conversation. Context carryover can affect comparisons.</p><p>Historical AI-assisted reviews are available for comparison. The separate official rubric governs new ratings. Independent fact verification and critical-failure adjudication have their own fields.</p>')}</div>`;
+  }).join(''))}${state.demo?panel('About this demo','<p>The built-in prompts, responses, rubric and ratings are synthetic examples. Import both study workbooks to inspect the actual research records privately in this browser.</p><p>Review decisions stay on this browser and do not sync across devices.</p>'):panel('Research methods','<p>Expanded-phase data used six prompts per shared model conversation. Context carryover can affect comparisons.</p><p>Historical AI-assisted reviews are available for comparison. The separate official rubric governs new ratings. Independent fact verification and critical-failure adjudication have their own fields.</p>')}</div>`;
 }
 function report(r){
   if(!r) return note('Choose both workbooks to validate the study.');
@@ -85,9 +94,11 @@ function dataPage(){
   if(tab==='Rubric') content=criteria().map(c=>`<details><summary>${c.ID} · ${esc(c['Checklist Dimension'])} · ${esc(c['Scenario / Domain'])}</summary>${card(c)}</details>`).join('');
   if(tab==='Verification') content=table('checks',['Check ID','Scenario','Focus','Status','Next action'],(state.checks||[]).map(c=>[c['Check ID'],c.Scenario,c['Check Focus'],c['Verification Status'],c['Recommended Correction or Next Action']]));
   if(tab==='Import report') content=report(state.report);
-  return title(names.data,'Validate study inputs, inspect original records, and browse the official scoring criteria.')+panel('Import workbooks',`<form id="import"><div class="toolbar">
+  return title(names.data,'Validate study inputs, inspect original records, and browse the official scoring criteria.')+panel('Import workbooks',`${window.workspace?note('Files are read in this tab. They are not uploaded. Reloading the page clears the imported dataset.') : ''}
+    <form id="import"><div class="toolbar">
     <label>Official rubric<input type="file" name="rubric" accept=".xlsx" required></label><label>Testing Log<input type="file" name="study" accept=".xlsx" required></label></div>
-    <div class="toolbar"><button value="preview">Validate &amp; preview</button><button class="primary" value="save">Import workbooks</button></div><div id="message" aria-live="polite"></div></form>`)+
+    <div class="toolbar"><button value="preview">Validate &amp; preview</button><button class="primary" value="save">Import workbooks</button>
+    ${window.workspace&&!state.demo?'<button type="button" id="restore-demo">Return to synthetic demo</button>':''}</div><div id="message" aria-live="polite"></div></form>`)+
     `<section class="panel"><div class="toolbar">${tabs.map(t=>`<button data-tab="${t}" aria-pressed="${t===tab}">${t}</button>`).join('')}</div>${content}</section><dialog id="record"></dialog>`;
 }
 function controls(r){
@@ -106,7 +117,7 @@ const sourceSelect=(label,id,values,value)=>`<label>${label}<select id="${id}" a
 function evaluationCard(e){
   const flag=e.critical_candidate?'<span class="pill warn">Potential Critical Failure</span>':'';
   const evidence=e.evidence?pre(e.evidence):'<p class="muted">No excerpt was recorded.</p>';
-  return panel(e.source,`<div class="badges"><span class="pill">Preliminary</span><span class="pill">${esc(e.source_rating)}</span>${flag}</div>
+  return panel(e.source,`<div class="badges"><span class="pill">${state.demo?'Synthetic preliminary example':'Preliminary'}</span><span class="pill">${esc(e.source_rating)}</span>${flag}</div>
     <h3>Evidence excerpt</h3><small>${esc(e.quote_match==='Unmatched'?'Source excerpt differs from the original response. Check before citing.':e.quote_match)}</small>${evidence}
     <h3>Scoring rationale</h3><p class="rationale">${esc(e.rationale||'No rationale recorded.')}</p>
     <details ${e.critical_candidate?'open':''}><summary>Source flags and provenance</summary><dl>
@@ -117,7 +128,7 @@ function evaluationCard(e){
       <dt>Evaluation date</dt><dd>${esc(e.evaluation_date||'Not recorded on this row')}</dd></dl></details>`);
 }
 function evaluationPage(){
-  const h=title(names.evaluation,'Explore the study’s preliminary ratings beside the original evidence and official rubric.');
+  const h=title(names.evaluation,'Explore the study’s preliminary ratings beside the source evidence and rubric.');
   const r=current();
   if(!r)return h+noStudy();
   const selectedSource=historical().filter(e=>e.source===evaluationSource);
@@ -126,7 +137,7 @@ function evaluationPage(){
     matches('evaluationFlag',e.critical_candidate?'Potential CF':'No candidate'));
   const item=pairHistory().find(e=>e.source===evaluationSource);
   return h+`<section class="panel"><h2>Historical evaluations</h2>
-    ${note('These ratings and flags come from preliminary workbook evaluations. Human decisions are recorded separately.')}
+    ${note(state.demo?'These illustrative ratings and flags are synthetic examples. Human decisions are recorded separately.':'These ratings and flags come from preliminary workbook evaluations. Human decisions are recorded separately.')}
     <div class="toolbar">${sourceSelect('Evaluation source','evaluation-source',evaluationSources,evaluationSource)}
       ${fields.map(([label,key])=>filter(label,'evaluation'+key,all(selectedSource.map(e=>e[key])))).join('')}
       ${filter('Critical Failure filter','evaluationFlag',['Potential CF','No candidate'])}</div>
@@ -138,7 +149,7 @@ function evaluationPage(){
       ${card(criteria().find(c=>c.ID===criterion))}</div>${sources(r)}`;
 }
 function reviewPage(){
-  const h=title(names.review,'Record an independent assessment against the official rubric.');
+  const h=title(names.review,'Record an independent assessment against the selected rubric.');
   const r=current();
   if(!r)return h+noStudy();
   const historic=pairHistory();
@@ -156,7 +167,7 @@ function reviewPage(){
   <div class="toolbar">${sourceSelect('Queue source','queue-source',evaluationSources,evaluationSource)}${filter('Queue filter','queue',qs)}</div>
   ${table('queue',['Response ID','Criterion','Preliminary rating'],queue.map(e=>[link(e.response_id,'queue',e.response_id+':'+e.criterion_id),e.criterion_id,e.source_rating]))}</details>${controls(r)}</section>
   <div class="split"><div>${panel('Original model response',pre(r[raw]))}${panel('Original prompt',pre(prompt(r)['Exact English Prompt']))}</div><div>
-  ${panel('Reviewer decision',`<form id="review-form" class="fields"><label>Reviewer label<input type="text" name="actor" maxlength="100" required></label>
+  ${panel('Reviewer decision',`${window.workspace?note('Reviews are saved in this browser and do not sync across devices. Reimport the same workbooks to retrieve decisions for a private study.'):''}<form id="review-form" class="fields"><label>Reviewer label<input type="text" name="actor" maxlength="100" required></label>
   ${field('Decision','decision',['Independent','Unresolved'],'Independent')}
   ${field('Rating','rating',ratings,'Pending')}
   <label>Exact quote<textarea name="exact_quote"></textarea></label>
@@ -186,7 +197,10 @@ function resultsPage(){
     return [k,n+c.Pending,...ratings.map(r=>c[r]),points+' / '+2*n,n?(100*points/(2*n)).toFixed(1)+'%':'—',c.candidate,c.confirmed];
   });
   return title(names.results,'Compare scoring coverage and export criterion ratings with provenance.')+panel('Evaluation results',
-    `<div class="toolbar"><a class="button primary" href="/api/export/xlsx?source=${encodeURIComponent(resultSource)}">Download Excel</a><a class="button" href="/api/export/csv?source=${encodeURIComponent(resultSource)}">Download CSV</a><a class="button" href="/api/source-zip">Download source ZIP</a><small>Downloads include the entire selected source.</small></div>
+    `<div class="toolbar">${window.workspace?
+        '<button class="primary" data-export="xlsx">Download Excel</button><button data-export="csv">Download CSV</button><a class="button" href="./source.zip" download>Download source ZIP</a>':
+        `<a class="button primary" href="/api/export/xlsx?source=${encodeURIComponent(resultSource)}">Download Excel</a><a class="button" href="/api/export/csv?source=${encodeURIComponent(resultSource)}">Download CSV</a><a class="button" href="/api/source-zip">Download source ZIP</a>`}
+        <small>Downloads include the entire selected source.</small></div><div id="export-message" aria-live="polite"></div>
     <div class="toolbar">${sourceSelect('Results source','results-source',[...evaluationSources,'Human Review'],resultSource)}${fields.map(([k,l])=>filter(l,'res'+k,all(results.map(r=>r[k])))).join('')}</div>
     <div class="toolbar">${['Response','Criterion'].map(x=>`<button data-mode="${x}" aria-pressed="${x===mode}">${x} summary</button>`).join('')}</div>
     ${note(resultSource==='Human Review'?'Scores reflect saved reviewer decisions.':'Preliminary results from the selected workbook tab. Human decisions appear in separate export columns.')}${note('Scored subset: Yes = 2, Partially = 1, No = 0. N/A is excluded. Pending is applicable and unscored. Critical failures are tracked separately.')}
@@ -198,12 +212,23 @@ function render(){
     if(a.hash==='#'+route)a.setAttribute('aria-current','page');
     else a.removeAttribute('aria-current');
   }
-  $('#view').innerHTML=({overview,data:dataPage,evaluation:evaluationPage,judge:evaluationPage,review:reviewPage,results:resultsPage}[route]||overview)();
+  const content=({overview,data:dataPage,evaluation:evaluationPage,judge:evaluationPage,review:reviewPage,results:resultsPage}[route]||overview)();
+  $('#view').innerHTML=(state.demo?'<p class="dataset-banner">Synthetic demonstration data · For presentation only</p>':'')+content;
 }
 document.addEventListener('click',async ev=>{
   const b=ev.target.closest('button');
   if(!b)return;
   const d=b.dataset;
+  if(b.id==='restore-demo'){
+    window.workspace.loadDemo();
+    await refresh();tab='Responses';render();
+  }
+  if(d.export){
+    b.disabled=true;
+    try{ await window.workspace.exportFile(d.export,resultSource); }
+    catch(error){ if($('#export-message'))$('#export-message').innerHTML=note(error.message,true); }
+    finally{ b.disabled=false; }
+  }
   if(d.tab){tab=d.tab;render();}
   if(d.mode){mode=d.mode;render();}
   if(d.sort){
