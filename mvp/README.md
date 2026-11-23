@@ -1,8 +1,8 @@
 # AI Safety Evaluation Assistant
 
-Local, single-researcher workspace for the UN-ICC × NYU capstone. The frontend uses HTML, CSS and JavaScript. FastAPI serves the interface and API, openpyxl handles Excel, and SQLite persists imports, Judge runs and review decisions.
+An offline research workspace for the UN-ICC × NYU capstone. Browse the original study records, inspect preliminary evidence beside the official rubric, record independent decisions, and export the results.
 
-## Launch
+## Launch the presentation
 
 Requires Python 3.10 or newer. From the directory containing this README:
 
@@ -13,21 +13,27 @@ python -m pip install -r requirements.txt
 python -m uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000. In **Data & Rubric**, select the official rubric and original Testing Log from the assignment uploads, then validate and import. If preferred, import before launching:
+On Windows, activate the virtual environment with `.venv\Scripts\Activate.ps1`. Open http://127.0.0.1:8000. In **Data & Rubric**, select the official rubric and Testing Log supplied with the project, then validate and import them. Alternatively, import them from the command line before starting the server:
 
 ```bash
 python app.py /path/to/official-rubric.xlsx /path/to/testing-log.xlsx
 ```
 
-The source package is independent of the research files. The original Excel files stay read-only. SQLite state lives in `local/study.sqlite3` by default. If you set `EVAL_DB`, use the same path for both CLI import and server startup. This interface is designed for local, single-user access. A shared deployment requires authentication and access controls.
+After installing the dependencies, the entire app runs offline. The source ZIP contains the app and test code. Use your existing workbook copies for the presentation. The app reads them without modifying the source files. SQLite state lives in `local/study.sqlite3` by default. To use a different path, set `EVAL_DB` consistently for the import and the web server. The default local launch listens on your own computer.
 
-## Gemini Judge
+## Present the workflow
 
-Set `GEMINI_API_KEY` in the server process environment and restart. Optionally set `GEMINI_MODEL` to a model available to the project. The default is `gemini-2.5-flash`. The server needs HTTPS access to `generativelanguage.googleapis.com`. Select the response and criterion, then click **Run Gemini Judge**. A click submits the original study prompt, original answer and selected official criterion to Google. In offline mode you can document an independent human decision.
+1. **Overview** shows 36 study prompts, 108 collected responses, and 20 official rubric criteria.
+2. **Data & Rubric** opens the full original prompt and response, workbook provenance, official scoring anchors, and import report.
+3. **Evaluation Workspace** filters either of the two preliminary worksheet sources by model, rating, criterion, or potential Critical Failure. Select a row to inspect evidence, rationale, provenance, and the official anchors. Pilot excerpts that differ from the original response are visibly flagged.
+4. **Human Review** records independent assessments and unresolved decisions. Reviewer identity, evidence, reason, verification status and critical-failure decision are stored separately from historical records.
+5. **Results & Export** selects a worksheet source or human decisions and displays response or criterion summaries. Excel and CSV download the full selected source, including separate reviewer fields where present. Excel also includes review history. **Download source ZIP** packages the application.
 
-Every request creates a new run with request settings, returned provider body, status, timestamps and reported usage. Invalid structured output and unverifiable quotes fail validation. Failed requests can be retried by submitting a new run. The interface displays historical workbook reviews for comparison. The Judge request uses the official rubric and original study text exclusively.
+The pilot tab contains 495 preliminary records. The second-review tab contains 632 preliminary records. Each tab is scored separately. Source flags and human adjudication have distinct fields. Scored-subset percentages exclude N/A and Pending. The app records C-05 rubric discrepancies and the unresolved V-023 source duplication concern. The expanded phase used six prompts per shared model conversation.
 
-## Verify
+Live AI evaluation is a future enhancement. This release has no external AI runtime dependency.
+
+## Reproduce browser verification
 
 ```bash
 python -m pip install -r requirements-test.txt
@@ -35,10 +41,4 @@ python -m playwright install chromium
 python verify.py /path/to/official-rubric.xlsx /path/to/testing-log.xlsx --output /tmp/evaluation-verification
 ```
 
-To use an installed Chromium, append `--chromium /path/to/chromium`. Verification creates a disposable SQLite database. Its exported sample includes a labeled software test decision and has no live Judge results.
-
-## Research provenance
-
-The supplied workbooks describe 36 pilot responses and 72 expanded responses. The app derives phase from collection-method provenance in the supplied Testing Log. Expanded-phase responses came from six prompts per shared model conversation. See the import report and verification log for the open duplicated-source-block issue V-023. The 108 imported cells are preserved verbatim. Tab 04 and tab 08 provide distinct historical coverage with 495 and 632 records. The official separate workbook governs the scoring anchors, including the C-05 discrepancy.
-
-Data import validates this study's 36-prompt and three-model layout. Matching workbook hashes reuse an existing version. A distinct pair is stored as a separate version and becomes the active study. Source worksheets are preserved in the uploaded originals and imported snapshots. Dashboard percentages are scored-subset percentages. Pending ratings and independent fact checks remain visible, and critical-failure adjudication stays separate.
+To use an installed Chromium, append `--chromium /path/to/chromium`. Verification uses a disposable database. Sample exports produced by the suite include a clearly labeled software-test review.

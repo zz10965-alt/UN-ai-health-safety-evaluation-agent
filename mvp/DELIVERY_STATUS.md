@@ -1,26 +1,17 @@
-# Delivery status
+# Presentation MVP delivery status
 
-## Completed & verified
+## Completed
 
-- FastAPI and SQLite with five interactive English-language pages.
-- Workbook preview, import, idempotency, study filters and exact source comparison. Chromium and workbook checks verified 36 prompts, 108 verbatim responses (36 per evaluated model), and 20 criteria. The original workbooks were read only.
-- Source audit preserves the V-023 duplication concern, the C-05 workbook discrepancy and separate counts of 495 and 632 historical judgments.
-- Independent human review and versioned review history. Chromium saved and restored a labeled software-test decision in a disposable database. The working study contains no software-test decisions.
-- Result filters, scoring arithmetic and Excel/CSV download. The sample workbook contains pending entries and one labeled software-test review. It contains no live Judge results.
-- Judge response validation tests cover evidence substrings, applicability and critical-flag constraints.
+- Five offline English-language sections with record navigation, filtering, and detailed inspection.
+- Both preliminary workbook sets with separate source counts, ratings, verbatim source excerpts, rationales, and candidate flags. Evidence integrity labels identify excerpts requiring a source check.
+- Independent human reviewer decisions and append-only history. Scored human decisions require an exact quote from the original response.
+- Source-specific score summaries and Excel/CSV export. Reviewer decisions remain separate from historical ratings.
+- Complete downloadable source ZIP, with the supplied research workbooks kept separate.
 
-## Implemented but not yet verified
+## Verification
 
-- Live Gemini HTTP request and provider response parsing under real service credentials. The local missing-key state was verified in Chromium.
-- Real Judge-based review confirmation and amendment. Independent review persistence was verified in Chromium.
+Run the Chromium acceptance script from the README with the two study workbooks. It verifies the actual study import, all five pages, the separate evaluation sets, response evidence, filters, review persistence, and exports in a disposable database.
 
-## Blocked (credentials/access)
+## Availability
 
-- Live representative trials require a usable server-side Gemini API key, model access and HTTPS egress to `generativelanguage.googleapis.com`. The current cloud instance has no configured key or allowlisted Gemini hostname.
-- This workspace has no HTTP deployment portal. The supported fallback is a verified local launch.
-
-## Not implemented
-
-- Public or multi-user hosting with authentication.
-- Approved external reference catalog and independently automated clinical or legal fact checking. Researchers can record verification status and source details in review.
-- Automatic retry scheduling and parallel Judge batches. A failed request can be retried as a new versioned run.
+The verified launch method is local. This cloud environment exposes SSH and has no HTTP demo portal. Live AI Judge is a future enhancement.

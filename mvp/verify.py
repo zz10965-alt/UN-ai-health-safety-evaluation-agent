@@ -23,26 +23,16 @@ parser.add_argument('--chromium', default=None)
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 
-rating = dict(applies=True, rating='Yes', exact_quote='exact evidence', rationale='Criterion addressed.',
-              critical_failure_candidate=False, critical_failure_reason='', fact_verification_status='Not required')
-criterion = {'Fatal?':'No'}
-app.validate_judgment(rating, 'Text with exact evidence in it.', criterion)
-for bad in [dict(rating,exact_quote='fabricated'), dict(rating,rating='N/A'), dict(rating,critical_failure_candidate=True)]:
-    try:
-        app.validate_judgment(bad, 'Text with exact evidence in it.', criterion)
-    except ValueError:
-        continue
-    raise AssertionError('Accepted invalid Judge result')
 scored = app.summarize([{'rating':r} for r in app.RATINGS], [])[0]
 assert (scored['applicable'],scored['scored_points'],scored['scored_max'],scored['scored_subset_pct']) == (4,3,6,50)
-print('PASS Judge schema/evidence validation and scoring arithmetic')
+print('PASS scoring arithmetic')
 
 with tempfile.TemporaryDirectory() as work:
     with socket.socket() as server_socket:
         server_socket.bind(('127.0.0.1',0))
         port = server_socket.getsockname()[1]
     base = f'http://127.0.0.1:{port}'
-    env = dict(os.environ,EVAL_DB=str(Path(work)/'test.sqlite3'),GEMINI_API_KEY='')
+    env = dict(os.environ,EVAL_DB=str(Path(work)/'test.sqlite3'))
     with subprocess.Popen([sys.executable,'-m','uvicorn','app:app','--host','127.0.0.1','--port',str(port)],
                           cwd=app.ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) as server:
         try:
@@ -58,6 +48,8 @@ with tempfile.TemporaryDirectory() as work:
                 page.set_default_timeout(6000)
                 errors=[]
                 page.on('pageerror',lambda exc: errors.append(str(exc)))
+                external = []
+                page.on('request',lambda req: external.append(req.url) if not req.url.startswith(base) else None)
                 page.goto(base)
                 expect(page.get_by_role('heading',name='AI Safety Evaluation Assistant')).to_be_visible()
                 page.get_by_role('link',name='Browse research data').click()
@@ -85,17 +77,44 @@ with tempfile.TemporaryDirectory() as work:
                 assert page.request.post(base+'/api/import',multipart=upload).ok
                 assert page.request.get(base+'/api/state').json()['report']['imported_at']==first_timestamp
                 print('PASS workbook preview, browser import, provenance, idempotency and exact equality for all 108 source responses')
+                page.get_by_role('button',name='Prompts',exact=True).click()
+                assert page.locator('tbody tr').count()==36
+                page.get_by_role('button',name='Rubric',exact=True).click()
+                assert page.locator('main details').count()==20
+                page.locator('main details summary').first.click()
+                expect(page.get_by_role('heading',name='C-01 · Scoring anchors')).to_be_visible()
+                page.get_by_role('button',name='Verification',exact=True).click()
+                expect(page.get_by_text('V-023',exact=True)).to_be_visible()
                 page.get_by_role('button',name='Responses',exact=True).click()
                 page.get_by_label('Model',exact=True).select_option('ChatGPT')
                 expect(page.get_by_text('36 of 108 responses')).to_be_visible()
                 rid=data['responses'][0]['Response ID']
                 page.get_by_role('button',name=rid,exact=True).click()
                 expect(page.get_by_role('dialog')).to_be_visible()
-                page.get_by_role('link',name='Evaluate response').click()
-                expect(page.get_by_role('button',name='Run Gemini Judge')).to_be_disabled()
-                cid=page.locator('#criterion').input_value()
-                assert page.request.post(base+'/api/judge',data={'response_id':rid,'criterion_id':cid}).status==503
+                page.get_by_role('link',name='View preliminary evaluation').click()
+                expect(page.get_by_role('heading',name='Evaluation Workspace')).to_be_visible()
+                expect(page.get_by_text('632 of 632 preliminary records')).to_be_visible()
+                page.get_by_label('Critical Failure filter').select_option('Potential CF')
+                expect(page.get_by_text('14 of 632 preliminary records')).to_be_visible()
+                candidate = next(e for e in data['evaluations'] if e['source']==app.SECOND and e['critical_candidate'])
+                page.locator('[data-evaluation="'+candidate['response_id']+':'+candidate['criterion_id']+'"]').click()
+                expect(page.get_by_text('Potential Critical Failure',exact=True)).to_be_visible()
+                expect(page.get_by_role('heading',name='Scoring rationale')).to_be_visible()
+                expect(page.get_by_text('Exact match',exact=True).last).to_be_visible()
+                assert candidate['evidence'] in pristine[candidate['response_id']]
+                page.locator('section').filter(has=page.get_by_role('heading',name=app.SECOND,exact=True)).screenshot(
+                    path=args.output/'evaluation-workspace.png')
+                page.get_by_label('Evaluation source').select_option(app.PILOT)
+                expect(page.get_by_text('495 of 495 preliminary records')).to_be_visible()
+                unmatched = next(e for e in data['evaluations'] if e['source']==app.PILOT and e['quote_match']=='Unmatched')
+                page.locator('[data-evaluation="'+unmatched['response_id']+':'+unmatched['criterion_id']+'"]').click()
+                expect(page.get_by_text('Source excerpt differs',exact=False)).to_be_visible()
+                rid, cid = unmatched['response_id'], unmatched['criterion_id']
                 page.get_by_role('link',name='Open human review').click()
+                expect(page.get_by_role('heading',name='Human Review',exact=True)).to_be_visible()
+                page.locator('#queue summary').click()
+                page.get_by_label('Queue filter').select_option('Critical candidate')
+                expect(page.locator('#queue summary')).to_contain_text('2 criterion records')
                 page.get_by_label('Reviewer label').fill('Browser verification')
                 page.get_by_label('Decision',exact=True).select_option('Unresolved')
                 page.get_by_label('Fact verification').select_option('Pending')
@@ -117,20 +136,40 @@ with tempfile.TemporaryDirectory() as work:
                 page.screenshot(path=args.output/'overview.png',full_page=True)
                 page.locator('nav a[href="#results"]').click()
                 page.get_by_role('button',name='Criterion summary').click()
+                page.get_by_label('Model',exact=True).select_option('Claude')
+                assert page.locator('tbody tr').count() > 0
+                page.get_by_label('Model',exact=True).select_option('All')
                 with page.expect_download() as download:
                     page.get_by_role('link',name='Download Excel').click()
                 save=args.output/'sample-scoring.xlsx'
                 download.value.save_as(save)
                 book=load_workbook(save,data_only=True,read_only=True)
                 assert len(list(book['Response Summary'].values))==109
-                assert list(book['Review History'].values)[1][0]==rid
+                history=list(book['Review History'].values)
+                assert dict(zip(*history))['response_id']==rid
+                detail=list(book['Criterion Results'].values)
+                assert len(detail)==633
+                headers=detail[0]
+                row=next(r for r in detail[1:] if r[headers.index('response_id')]==candidate['response_id']
+                         and r[headers.index('criterion_id')]==candidate['criterion_id'])
+                assert row[headers.index('evidence')]==candidate['evidence']
                 assert len(list(book['Criterion Results'].values))==len(page.request.get(base+'/api/results').json()[0])+1
                 book.close()
-                csv_rows=list(csv.DictReader(io.StringIO(page.request.get(base+'/api/export/csv').body().decode('utf-8-sig'))))
-                assert {r['rating'] for r in csv_rows}=={'Pending'}
-                assert any(r['reviewer']=='Browser verification' and not r['judge_rating'] for r in csv_rows)
+                page.get_by_label('Results source').select_option(app.PILOT)
+                expect(page.get_by_role('link',name='Download CSV')).to_have_attribute('href','/api/export/csv?source=04%20Pilot%20Evaluation')
+                with page.expect_download() as csv_download:
+                    page.get_by_role('link',name='Download CSV').click()
+                csv_file=args.output/'sample-pilot-scoring.csv'
+                csv_download.value.save_as(csv_file)
+                csv_rows=list(csv.DictReader(io.StringIO(csv_file.read_text(encoding='utf-8-sig'))))
+                assert len(csv_rows)==495
+                assert {r['rating'] for r in csv_rows}==set(app.RATINGS)
+                assert any(r['reviewer']=='Browser verification' and r['rating']!=r['review_rating'] for r in csv_rows)
+                page.get_by_label('Results source').select_option(app.HUMAN)
+                expect(page.get_by_text('Scores reflect saved reviewer decisions.',exact=True)).to_be_visible()
                 assert not errors, errors
-                print('PASS Chromium navigation, filtering, exact response view, missing-key Judge state, review persistence, dashboard and Excel/CSV exports')
+                assert not external, external
+                print('PASS Chromium navigation, source and flag filters, historical evidence, independent review persistence, dashboard and Excel/CSV exports (local requests only)')
         finally:
             server.terminate()
             server.wait(timeout=10)
