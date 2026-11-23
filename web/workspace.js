@@ -12,19 +12,45 @@
     try {return JSON.parse(localStorage.getItem(storageKey())||'[]');}
     catch {return [];}
   }
-  function cellValue(cell){
-    return cell.type===ExcelJS.ValueType.Formula ? cell.result ?? null : cell.text;
+  const elements=(node,tag)=>Array.from(node.getElementsByTagNameNS('*',tag));
+  function readText(node){
+    return elements(node,'t').map(t=>t.textContent).join('').replaceAll('_x005F_','');
   }
-  function sheetRows(book,name,header){
-    const sheet=book.getWorksheet(name);
-    require(sheet,'Missing worksheet: '+name);
-    const rows=[];
-    sheet.eachRow(row=>rows.push(Array.from({length:row.cellCount},(_,i)=>cellValue(row.getCell(i+1)))));
-    const index=rows.findIndex(row=>row[0]===header);
-    require(index>=0,'Missing column header in '+name);
-    const headers=rows[index];
-    return rows.slice(index+1).filter(row=>row[0]).map(row=>Object.fromEntries(
-      headers.flatMap((key,i)=>key?[[key,row[i]??'']]:[])));
+  async function openSheets(bytes){
+    const archive=await JSZip.loadAsync(bytes);
+    async function xml(path){
+      const file=archive.file(path);
+      require(file,'Missing workbook part: '+path);
+      const document=new DOMParser().parseFromString(await file.async('string'),'application/xml');
+      require(!elements(document,'parsererror').length,'Invalid workbook XML.');
+      return document;
+    }
+    const book=await xml('xl/workbook.xml');
+    const relationships=await xml('xl/_rels/workbook.xml.rels');
+    const targets=new Map(elements(relationships,'Relationship').map(r=>[r.getAttribute('Id'),r.getAttribute('Target')]));
+    const sheets=new Map(elements(book,'sheet').map(s=>[s.getAttribute('name'),
+      targets.get(s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id'))]));
+    const strings=archive.file('xl/sharedStrings.xml')?elements(await xml('xl/sharedStrings.xml'),'si').map(readText):[];
+    return async (name,header)=>{
+      require(sheets.get(name),'Missing worksheet: '+name);
+      const path=new URL(sheets.get(name),'https://workbook.invalid/xl/workbook.xml').pathname.slice(1);
+      const document=await xml(path);
+      const rows=elements(document,'row').map(row=>{
+        const cells=[];
+        for(const cell of elements(row,'c')){
+          const letters=cell.getAttribute('r').match(/^[A-Z]+/)[0];
+          const i=[...letters].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0)-1;
+          const v=elements(cell,'v')[0]?.textContent;
+          const kind=cell.getAttribute('t');
+          cells[i]=kind==='s'?strings[Number(v)]??'':kind==='inlineStr'?readText(cell):v??'';
+        }
+        return cells;
+      });
+      const index=rows.findIndex(row=>row[0]===header);
+      require(index>=0,'Missing column header in '+name);
+      return rows.slice(index+1).filter(row=>row[0]).map(row=>Object.fromEntries(
+        rows[index].flatMap((key,i)=>key?[[key,row[i]??'']]:[])));
+    };
   }
   async function workbook(file){
     require(file&&file.name.toLowerCase().endsWith('.xlsx')&&file.size>0&&file.size<=8_000_000,
@@ -41,8 +67,7 @@
       offset+=46+view.getUint16(offset+28,true)+view.getUint16(offset+30,true)+view.getUint16(offset+32,true);
     }
     require(count>0&&expanded<50_000_000,'Workbook expands beyond the supported size.');
-    const data=new ExcelJS.Workbook();
-    await data.xlsx.load(bytes);
+    const data=await openSheets(bytes);
     const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
     return {data,hash};
   }
@@ -50,9 +75,9 @@
     return {response_id:r['Response ID'],prompt_id:r['Prompt ID'],model:r['AI Platform'],domain:r['Health Domain'],
       setting:r['Study Setting'],group:r.group,case:r.case,phase:r.phase};
   }
-  function evaluationRows(log,source,byId){
+  async function evaluationRows(log,source,byId){
     const pilot=source===PILOT;
-    return sheetRows(log,source,pilot?'Evaluation ID':'Response ID').map(row=>{
+    return (await log(source,pilot?'Evaluation ID':'Response ID')).map(row=>{
       const r=byId.get(row['Response ID']), criterion_id=row[pilot?'Criterion':'Criterion ID'];
       require(r&&codes.has(criterion_id),'Invalid preliminary evaluation linkage in '+source);
       const source_rating=row[pilot?'Rubric Rating (AI preliminary)':'Current rating'];
@@ -73,18 +98,18 @@
     const files=['rubric','study'].map(k=>form.get(k));
     const [rubric,study]=await Promise.all(files.map(workbook));
     const log=study.data;
-    const criteria=sheetRows(rubric.data,'Criteria (EN)','ID');
+    const criteria=await rubric.data('Criteria (EN)','ID');
     require(criteria.length===20&&new Set(criteria.map(c=>c.ID)).size===20&&criteria.every(c=>codes.has(c.ID)&&
       ['Pass Condition (Yes)','Partial Condition','Fail Condition (No)','Fatal?','Notes'].every(k=>c[k])),
       'Expected all 20 official criteria and scoring anchors.');
-    const prompts=sheetRows(log,'01 Pilot Prompts','Prompt ID');
+    const prompts=await log('01 Pilot Prompts','Prompt ID');
     const byPrompt=new Map(prompts.map(p=>[p['Prompt ID'],p]));
     require(prompts.length===36&&byPrompt.size===36&&prompts.every(p=>p['Exact English Prompt']),'Expected 36 unique prompts.');
     for(const p of prompts){
       p.candidate_codes=[...new Set((p['Candidate Criteria']||'').match(/C-\d{2}/g)||[])].sort();
       require(p.candidate_codes.every(code=>codes.has(code)),'Unknown scenario criterion for '+p['Prompt ID']);
     }
-    const responses=sheetRows(log,'02 Testing Log','Response ID');
+    const responses=await log('02 Testing Log','Response ID');
     const byId=new Map(responses.map(r=>[r['Response ID'],r]));
     const models={ChatGPT:0,Gemini:0,Claude:0}, phases={Pilot:0,Expanded:0}, pairs=new Set();
     const prompt_mismatches=[], duplicateMap=new Map();
@@ -106,9 +131,9 @@
       duplicateMap.get(duplicateKey).push(r['Response ID']);
     }
     require(Object.values(models).every(n=>n===36),'Expected 36 responses for each evaluated model.');
-    const evaluations=[...evaluationRows(log,PILOT,byId),...evaluationRows(log,SECOND,byId)];
-    const checks=sheetRows(log,'06 Verification Log','Check ID');
-    const reference=sheetRows(log,'10 Review Rubric','ID');
+    const evaluations=[...await evaluationRows(log,PILOT,byId),...await evaluationRows(log,SECOND,byId)];
+    const checks=await log('06 Verification Log','Check ID');
+    const reference=await log('10 Review Rubric','ID');
     const rubric_differences={};
     for(const c of criteria){
       const variants=reference.filter(r=>r.ID===c.ID);

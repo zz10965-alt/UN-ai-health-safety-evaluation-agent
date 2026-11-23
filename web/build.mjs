@@ -12,8 +12,10 @@ for (const name of ['workspace.js','demo.js']) {
 }
 await cp(new URL('./node_modules/exceljs/dist/exceljs.min.js',import.meta.url),asset('static/exceljs.min.js'));
 await cp(new URL('./node_modules/exceljs/LICENSE',import.meta.url),asset('static/exceljs-LICENSE'));
+await cp(new URL('./node_modules/jszip/dist/jszip.min.js',import.meta.url),asset('static/jszip.min.js'));
+await cp(new URL('./node_modules/jszip/LICENSE.markdown',import.meta.url),asset('static/jszip-LICENSE'));
 const html = await readFile(new URL('../mvp/static/index.html',import.meta.url),'utf8');
-const scripts = ['exceljs.min.js','demo.js','workspace.js'].map(name=>'<script defer src="./static/'+name+'"></script>').join('');
+const scripts = ['exceljs.min.js','jszip.min.js','demo.js','workspace.js'].map(name=>'<script defer src="./static/'+name+'"></script>').join('');
 await writeFile(asset('index.html'),html.replace('<meta charset="utf-8">',`<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">`).replaceAll('"/static/','"./static/').replace('<script defer',scripts+'<script defer'));
 await writeFile(asset('.nojekyll'),'');
 if (process.env.EVALUATION_SOURCE_ZIP !== 'skip') {
