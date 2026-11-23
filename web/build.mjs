@@ -17,5 +17,6 @@ const scripts = ['exceljs.min.js','demo.js','workspace.js'].map(name=>'<script d
 await writeFile(asset('index.html'),html.replace('<meta charset="utf-8">',`<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">`).replaceAll('"/static/','"./static/').replace('<script defer',scripts+'<script defer'));
 await writeFile(asset('.nojekyll'),'');
 if (process.env.EVALUATION_SOURCE_ZIP !== 'skip') {
-  execFileSync('git',['archive','--format=zip','--prefix=ai-safety-evaluation/','--output='+asset('source.zip').pathname,'HEAD']);
+  execFileSync('git',['archive','--format=zip','--prefix=ai-safety-evaluation/','--output='+asset('source.zip').pathname,'HEAD','README.md','mvp','web','.github/workflows/pages.yml'],
+    {cwd:new URL('../',import.meta.url)});
 }
